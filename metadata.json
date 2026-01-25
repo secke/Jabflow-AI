@@ -1,0 +1,8 @@
+{
+  "name": "JobFlow AI Agent",
+  "description": "An autonomous AI agent that analyzes your CV, searches for matching job opportunities using Google Search, and simulates the application process with personalized cover letters.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
