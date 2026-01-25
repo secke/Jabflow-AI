@@ -1,9 +1,10 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { UserProfile, JobOpportunity, AgentLog } from './types';
 import { extractProfileFromCV, searchJobs, analyzeJobFit, draftCoverLetter } from './geminiService';
 import { countries } from './countries';
 
+// --- Icons ---
 const IconSearch = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>;
 const IconBot = () => <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>;
 const IconUpload = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>;
@@ -18,8 +19,8 @@ export default function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [searchLocation, setSearchLocation] = useState<string>('');
-  const [locationQuery, setLocationQuery] = useState<string>('');
-  const [isLocationDropdownOpen, setIsLocationDropdownOpen] = useState(false);
+  const [locationFilter, setLocationFilter] = useState<string>('');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [jobs, setJobs] = useState<JobOpportunity[]>([]);
   const [logs, setLogs] = useState<AgentLog[]>([]);
@@ -42,21 +43,21 @@ export default function App() {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
-  // Handle outside clicks for dropdown
+  // Handle outside clicks to close the dropdown
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsLocationDropdownOpen(false);
+        setIsDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Sync searchLocation when profile is extracted
+  // Sync searchLocation when profile is extracted, if not already set
   useEffect(() => {
-    if (profile) {
-      setSearchLocation(profile.location);
+    if (profile && !searchLocation) {
+      setSearchLocation(profile.location || 'France');
     }
   }, [profile]);
 
@@ -85,12 +86,13 @@ export default function App() {
     
     try {
       const base64Data = await fileToBase64(selectedFile);
-      addLog("Analyse du document par l'IA...", "agent");
+      addLog("Analyse du document par Gemini...", "agent");
       const extractedProfile = await extractProfileFromCV(base64Data, selectedFile.type);
       setProfile(extractedProfile);
       addLog(`Profil extrait avec succès : ${extractedProfile.name}`, "success");
     } catch (error) {
-      addLog("Erreur : Impossible de traiter le fichier.", "error");
+      addLog("Erreur lors de l'analyse du document.", "error");
+      console.error(error);
     } finally {
       setIsProcessing(false);
     }
@@ -99,17 +101,16 @@ export default function App() {
   const startJobAgent = async () => {
     if (!profile) return;
     setIsAgentRunning(true);
-    addLog(`Agent lancé. Recherche d'offres en ${searchLocation || 'Remote'}...`, "agent");
+    addLog(`Démarrage de la recherche en ${searchLocation}...`, "agent");
     
     try {
       const foundJobs = await searchJobs(profile, searchLocation);
       setJobs(foundJobs);
-      addLog(`${foundJobs.length} correspondances trouvées via Google Search.`, "success");
+      addLog(`${foundJobs.length} opportunités trouvées sur le web.`, "success");
 
-      for (let i = 0; i < foundJobs.length; i++) {
-        const job = foundJobs[i];
+      for (const job of foundJobs) {
         setJobs(prev => prev.map(j => j.id === job.id ? { ...j, status: 'analyzing' } : j));
-        addLog(`Analyse de poste : ${job.title} chez ${job.company}...`, "info");
+        addLog(`Évaluation de l'offre : ${job.title}...`, "info");
         
         const { score, analysis } = await analyzeJobFit(job, profile);
         
@@ -121,10 +122,10 @@ export default function App() {
         } : j));
 
         if (score > 70) {
-          addLog(`Excellent match (${score}%) ! Rédaction de la lettre de motivation...`, "success");
+          addLog(`Excellent match (${score}%) ! Préparation de la candidature...`, "success");
           const coverLetter = await draftCoverLetter(job, profile);
-          addLog(`Simulation d'envoi pour ${job.title}...`, "agent");
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          addLog(`Simulation d'envoi pour ${job.company}...`, "agent");
+          await new Promise(resolve => setTimeout(resolve, 1500));
           
           setJobs(prev => prev.map(j => j.id === job.id ? { 
             ...j, 
@@ -132,27 +133,27 @@ export default function App() {
             coverLetter,
             appliedDate: new Date().toLocaleDateString() 
           } : j));
-          addLog(`Candidature envoyée avec succès à ${job.company} !`, "success");
-        } else {
-          addLog(`Score insuffisant (${score}%). Passage à l'offre suivante.`, "warning");
+          addLog(`Candidature soumise avec succès !`, "success");
         }
       }
-      addLog("Cycle de l'agent terminé.", "success");
+      addLog("Opération terminée avec succès.", "success");
     } catch (error) {
-      addLog("L'agent a rencontré une erreur.", "error");
+      addLog("L'agent a rencontré une erreur inattendue.", "error");
     } finally {
       setIsAgentRunning(false);
     }
   };
 
-  const filteredCountries = countries.filter(c => 
-    c.toLowerCase().includes(locationQuery.toLowerCase())
-  );
+  const filteredCountries = useMemo(() => {
+    return countries.filter(c => 
+      c.toLowerCase().includes(locationFilter.toLowerCase())
+    );
+  }, [locationFilter]);
 
   return (
-    <div className="min-h-screen flex flex-col lg:flex-row">
-      {/* Sidebar: Profile & Setup */}
-      <div className="lg:w-96 bg-white border-r border-slate-200 flex flex-col p-6 space-y-8 h-screen sticky top-0 overflow-y-auto">
+    <div className="min-h-screen flex flex-col lg:flex-row bg-slate-50">
+      {/* Sidebar */}
+      <div className="lg:w-96 bg-white border-r border-slate-200 flex flex-col p-6 space-y-8 h-screen sticky top-0 overflow-y-auto z-20">
         <header className="flex items-center space-x-3">
           <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-indigo-200">
             <IconBot />
@@ -165,46 +166,34 @@ export default function App() {
         {!profile ? (
           <div className="flex-1 flex flex-col space-y-6">
             <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 text-center">
-              <p className="text-sm text-indigo-700 leading-relaxed font-medium">
-                Uploadez votre CV pour commencer.
-              </p>
+              <p className="text-sm text-indigo-700 font-medium">Uploadez votre CV pour commencer l'aventure.</p>
             </div>
 
             <div 
               onClick={() => fileInputRef.current?.click()}
-              className={`flex-1 min-h-[200px] flex flex-col items-center justify-center border-2 border-dashed rounded-2xl cursor-pointer transition-all p-4 ${selectedFile ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-400 hover:bg-slate-50'}`}
+              className={`flex-1 min-h-[240px] flex flex-col items-center justify-center border-2 border-dashed rounded-2xl cursor-pointer transition-all p-6 ${selectedFile ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-400 hover:bg-slate-50'}`}
             >
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                onChange={handleFileChange} 
-                className="hidden" 
-                accept=".pdf,.txt,.doc,.docx"
-              />
-              
+              <input type="file" ref={fileInputRef} onChange={handleFileChange} className="hidden" accept=".pdf,.txt,.doc,.docx" />
               {!selectedFile ? (
-                <div className="flex flex-col items-center text-center space-y-3">
-                  <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
+                <div className="flex flex-col items-center text-center space-y-4">
+                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
                     <IconUpload />
                   </div>
                   <div>
-                    <p className="text-sm font-bold text-slate-700">Cliquez pour uploader</p>
-                    <p className="text-xs text-slate-400 mt-1">PDF, DOCX ou TXT</p>
+                    <p className="text-sm font-bold text-slate-700">Sélectionner votre CV</p>
+                    <p className="text-xs text-slate-400 mt-1">PDF ou Texte supporté</p>
                   </div>
                 </div>
               ) : (
-                <div className="flex flex-col items-center text-center space-y-3">
-                  <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
+                <div className="flex flex-col items-center text-center space-y-4 animate-in">
+                  <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600">
                     <IconFile />
                   </div>
                   <div className="max-w-full overflow-hidden">
                     <p className="text-sm font-bold text-indigo-700 truncate px-2">{selectedFile.name}</p>
                     <p className="text-xs text-indigo-400 mt-1">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                   </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setSelectedFile(null); }}
-                    className="p-1 text-slate-400 hover:text-rose-500 transition-colors"
-                  >
+                  <button onClick={(e) => { e.stopPropagation(); setSelectedFile(null); }} className="p-2 text-slate-400 hover:text-rose-500 transition-colors">
                     <IconX />
                   </button>
                 </div>
@@ -214,24 +203,16 @@ export default function App() {
             <button
               onClick={handleCvUpload}
               disabled={isProcessing || !selectedFile}
-              className="w-full py-3 bg-indigo-600 text-white rounded-xl font-semibold flex items-center justify-center space-x-2 hover:bg-indigo-700 transition-colors disabled:opacity-50 shadow-md shadow-indigo-100"
+              className="w-full py-4 bg-indigo-600 text-white rounded-xl font-bold flex items-center justify-center space-x-2 hover:bg-indigo-700 transition-all disabled:opacity-50 shadow-lg shadow-indigo-100 active:scale-95"
             >
-              {isProcessing ? (
-                <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
-              ) : (
-                <>
-                  <IconBot />
-                  <span>Analyser le Document</span>
-                </>
-              )}
+              {isProcessing ? <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" /> : <><IconBot /><span>Analyser mon CV</span></>}
             </button>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col space-y-6">
+          <div className="flex-1 flex flex-col space-y-6 animate-in">
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-2">
-                <IconUser />
-                <span>Profil Extrait</span>
+                <IconUser /><span>Profil Détecté</span>
               </label>
               <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
                 <h2 className="text-lg font-bold text-slate-800">{profile.name}</h2>
@@ -241,164 +222,165 @@ export default function App() {
 
             <div className="space-y-3 relative" ref={dropdownRef}>
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center space-x-2">
-                <IconMapPin />
-                <span>Localisation de Recherche</span>
+                <IconMapPin /><span>Zone de Recherche</span>
               </label>
               
               <button 
-                onClick={() => setIsLocationDropdownOpen(!isLocationDropdownOpen)}
-                className="w-full p-3 bg-white border border-slate-200 rounded-xl text-sm flex items-center justify-between hover:border-indigo-400 transition-all shadow-sm"
+                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                className="w-full p-4 bg-white border border-slate-200 rounded-xl text-sm flex items-center justify-between hover:border-indigo-400 focus:ring-2 focus:ring-indigo-100 transition-all shadow-sm group"
               >
-                <div className="flex items-center space-x-2 text-slate-700 truncate">
+                <div className="flex items-center space-x-3 text-slate-700 truncate">
                   <IconMapPin />
-                  <span className="truncate">{searchLocation || 'Sélectionner un pays...'}</span>
+                  <span className="truncate font-medium">{searchLocation || 'Choisir un pays...'}</span>
                 </div>
                 <IconChevronDown />
               </button>
 
-              {isLocationDropdownOpen && (
-                <div className="absolute z-50 top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-xl shadow-xl flex flex-col overflow-hidden animate-in fade-in slide-in-from-top-2">
-                  <div className="p-2 border-b border-slate-100">
-                    <input 
-                      autoFocus
-                      type="text"
-                      placeholder="Filtrer les pays..."
-                      className="w-full p-2 text-sm bg-slate-50 rounded-lg border-none focus:ring-2 focus:ring-indigo-500 outline-none"
-                      value={locationQuery}
-                      onChange={(e) => setLocationQuery(e.target.value)}
-                    />
+              {isDropdownOpen && (
+                <div className="absolute z-[100] top-full left-0 right-0 mt-2 bg-white border border-slate-200 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in">
+                  <div className="p-3 border-b border-slate-50 bg-slate-50/50">
+                    <div className="relative">
+                      <input 
+                        autoFocus
+                        type="text"
+                        placeholder="Rechercher un pays..."
+                        className="w-full pl-9 p-2.5 text-sm bg-white rounded-lg border border-slate-200 focus:ring-2 focus:ring-indigo-500 outline-none transition-all"
+                        value={locationFilter}
+                        onChange={(e) => setLocationFilter(e.target.value)}
+                      />
+                      <div className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
+                        <IconSearch />
+                      </div>
+                    </div>
                   </div>
-                  <div className="max-h-60 overflow-y-auto">
+                  <div className="max-h-64 overflow-y-auto scrollbar-thin">
                     {filteredCountries.length > 0 ? (
                       filteredCountries.map(country => (
                         <button
                           key={country}
-                          className={`w-full text-left px-4 py-2 text-sm hover:bg-indigo-50 hover:text-indigo-600 transition-colors ${searchLocation === country ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-600'}`}
+                          className={`w-full text-left px-5 py-3 text-sm hover:bg-indigo-50 hover:text-indigo-600 transition-colors flex items-center justify-between ${searchLocation === country ? 'bg-indigo-50 text-indigo-700 font-bold' : 'text-slate-600'}`}
                           onClick={() => {
                             setSearchLocation(country);
-                            setIsLocationDropdownOpen(false);
-                            setLocationQuery('');
+                            setIsDropdownOpen(false);
+                            setLocationFilter('');
                           }}
                         >
                           {country}
+                          {searchLocation === country && <IconCheck />}
                         </button>
                       ))
                     ) : (
-                      <div className="p-4 text-center text-xs text-slate-400">Aucun résultat</div>
+                      <div className="p-8 text-center text-xs text-slate-400 italic">Aucun pays ne correspond</div>
                     )}
                   </div>
                 </div>
               )}
-              <p className="text-[10px] text-slate-400 italic">
-                L'agent cherchera des offres dans cette zone.
-              </p>
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Compétences</label>
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Expertises clés</label>
               <div className="flex flex-wrap gap-2">
-                {profile.skills.slice(0, 10).map(skill => (
-                  <span key={skill} className="px-3 py-1 bg-white border border-slate-200 text-xs font-medium text-slate-600 rounded-full shadow-sm">
+                {profile.skills.slice(0, 8).map(skill => (
+                  <span key={skill} className="px-3 py-1 bg-white border border-slate-200 text-[11px] font-semibold text-slate-500 rounded-full shadow-sm">
                     {skill}
                   </span>
                 ))}
               </div>
             </div>
 
-            <div className="pt-4 mt-auto">
+            <div className="pt-6 mt-auto">
               <button
                 onClick={startJobAgent}
                 disabled={isAgentRunning || !searchLocation}
-                className="w-full py-4 bg-emerald-600 text-white rounded-xl font-bold flex items-center justify-center space-x-2 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all disabled:opacity-50"
+                className="w-full py-4 bg-emerald-600 text-white rounded-xl font-bold flex items-center justify-center space-x-2 hover:bg-emerald-700 shadow-lg shadow-emerald-100 transition-all active:scale-95 disabled:opacity-50"
               >
                 {isAgentRunning ? (
-                  <>
-                    <div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" />
-                    <span>Agent en Cours...</span>
-                  </>
+                  <><div className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full" /><span>Agent en action...</span></>
                 ) : (
-                  <>
-                    <IconSearch />
-                    <span>Lancer la Recherche</span>
-                  </>
+                  <><IconSearch /><span>Lancer l'Agent IA</span></>
                 )}
               </button>
               <button
                 onClick={() => { setProfile(null); setSelectedFile(null); setJobs([]); setLogs([]); }}
-                className="w-full mt-3 py-2 text-sm text-slate-400 hover:text-slate-600 font-medium transition-colors"
+                className="w-full mt-4 py-2 text-xs text-slate-400 hover:text-slate-600 font-semibold transition-colors uppercase tracking-widest"
               >
-                Changer de CV
+                Réinitialiser tout
               </button>
             </div>
           </div>
         )}
       </div>
 
-      {/* Main Content: Logs & Jobs */}
-      <main className="flex-1 flex flex-col min-h-screen bg-slate-50 overflow-hidden">
-        <div className="flex-1 p-6 overflow-y-auto">
+      {/* Main Panel */}
+      <main className="flex-1 flex flex-col min-h-screen overflow-hidden">
+        <div className="flex-1 p-6 lg:p-10 overflow-y-auto">
           {jobs.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center space-y-4 opacity-40">
-              <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center text-slate-400">
+            <div className="h-full flex flex-col items-center justify-center text-center space-y-6 opacity-40">
+              <div className="w-24 h-24 bg-slate-200 rounded-3xl flex items-center justify-center text-slate-400 rotate-12">
                 <IconSearch />
               </div>
-              <div>
-                <h3 className="text-lg font-semibold">Aucun job trouvé</h3>
-                <p className="text-sm">Configurez votre localisation et lancez l'agent.</p>
+              <div className="max-w-xs">
+                <h3 className="text-xl font-bold text-slate-800">Aucun résultat</h3>
+                <p className="text-sm mt-2">Votre agent attend vos instructions pour scanner le web.</p>
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 pb-20">
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 pb-10">
               {jobs.map(job => (
                 <div 
                   key={job.id} 
-                  className={`bg-white rounded-2xl border ${job.status === 'applied' ? 'border-emerald-200 shadow-emerald-50' : 'border-slate-200'} p-5 shadow-sm hover:shadow-md transition-all flex flex-col relative overflow-hidden`}
+                  className={`bg-white rounded-3xl border ${job.status === 'applied' ? 'border-emerald-200 ring-4 ring-emerald-50' : 'border-slate-200'} p-6 shadow-sm hover:shadow-xl transition-all flex flex-col relative overflow-hidden group animate-in`}
                 >
                   {job.status === 'applied' && (
-                    <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-bold px-3 py-1 rounded-bl-xl uppercase tracking-tighter">
+                    <div className="absolute top-0 right-0 bg-emerald-500 text-white text-[10px] font-black px-4 py-1.5 rounded-bl-2xl uppercase tracking-widest shadow-lg">
                       Candidature Envoyée
                     </div>
                   )}
                   
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="space-y-1">
-                      <h4 className="font-bold text-slate-800 text-lg leading-tight">{job.title}</h4>
-                      <p className="text-sm font-medium text-slate-500 flex items-center space-x-1">
-                        <span>{job.company}</span>
+                  <div className="flex justify-between items-start mb-6">
+                    <div className="space-y-1 flex-1 pr-4">
+                      <h4 className="font-extrabold text-slate-800 text-xl leading-snug group-hover:text-indigo-600 transition-colors">{job.title}</h4>
+                      <p className="text-sm font-semibold text-slate-500 flex items-center space-x-2">
+                        <span className="text-indigo-600">{job.company}</span>
                         <span className="text-slate-300">•</span>
                         <span>{job.location}</span>
                       </p>
                     </div>
                     {job.fitScore > 0 && (
-                      <div className={`flex flex-col items-center p-2 rounded-xl ${job.fitScore > 70 ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
-                        <span className="text-xl font-black leading-none">{job.fitScore}%</span>
-                        <span className="text-[10px] font-bold uppercase tracking-wider">Score</span>
+                      <div className={`shrink-0 flex flex-col items-center justify-center w-16 h-16 rounded-2xl shadow-inner ${job.fitScore > 70 ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-50 text-slate-400'}`}>
+                        <span className="text-2xl font-black leading-none">{job.fitScore}%</span>
+                        <span className="text-[9px] font-black uppercase tracking-widest mt-1">Match</span>
                       </div>
                     )}
                   </div>
 
                   {job.matchAnalysis && (
-                    <div className="mb-4 text-xs text-slate-600 bg-slate-50 p-3 rounded-lg leading-relaxed border border-slate-100">
-                      <span className="font-bold text-slate-400 uppercase text-[9px] block mb-1">Analyse de correspondance :</span>
+                    <div className="mb-6 text-xs text-slate-600 bg-slate-50 p-4 rounded-2xl leading-relaxed border border-slate-100 italic">
+                      <span className="font-black text-slate-400 uppercase text-[9px] block mb-2 not-italic">Raisonnement de l'IA :</span>
                       {job.matchAnalysis}
                     </div>
                   )}
 
-                  <div className="mt-auto pt-4 flex items-center justify-between border-t border-slate-50">
+                  <div className="mt-auto pt-6 flex items-center justify-between border-t border-slate-50">
                     <a 
                       href={job.url} 
                       target="_blank" 
                       rel="noopener noreferrer" 
-                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
+                      className="text-xs font-black text-indigo-600 hover:bg-indigo-50 px-3 py-2 rounded-lg transition-all flex items-center space-x-2"
                     >
-                      <span>Voir l'offre originale</span>
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                      <span>VOIR L'OFFRE</span>
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
                     </a>
                     
-                    {job.status === 'applied' && (
-                      <div className="flex items-center text-emerald-600 text-xs font-bold space-x-1">
+                    {job.status === 'applied' ? (
+                      <div className="flex items-center text-emerald-600 text-[11px] font-black space-x-2 bg-emerald-50 px-3 py-2 rounded-lg">
                         <IconCheck />
-                        <span>Postulé le {job.appliedDate}</span>
+                        <span>POSTULÉ LE {job.appliedDate}</span>
+                      </div>
+                    ) : job.status === 'analyzing' && (
+                      <div className="flex items-center text-indigo-500 text-[11px] font-black space-x-2 animate-pulse">
+                        <div className="w-2 h-2 bg-indigo-500 rounded-full" />
+                        <span>ANALYSE...</span>
                       </div>
                     )}
                   </div>
@@ -408,30 +390,30 @@ export default function App() {
           )}
         </div>
 
-        {/* Agent Logs Footer */}
+        {/* Footer Logs */}
         <div className="h-64 bg-slate-900 border-t border-slate-800 flex flex-col font-mono text-[13px] shadow-2xl relative">
-          <div className="px-4 py-2 bg-slate-800 border-b border-slate-700 flex justify-between items-center text-slate-400 font-sans">
-            <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 rounded-full ${isAgentRunning ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`} />
-              <span className="text-xs font-bold uppercase tracking-widest">Journal d'activité de l'Agent</span>
+          <div className="px-6 py-3 bg-slate-800/50 border-b border-slate-800 flex justify-between items-center text-slate-400 font-sans">
+            <div className="flex items-center space-x-3">
+              <div className={`w-2.5 h-2.5 rounded-full ${isAgentRunning ? 'bg-emerald-500 animate-pulse' : 'bg-slate-700 shadow-inner'}`} />
+              <span className="text-[10px] font-black uppercase tracking-[0.2em]">Flux d'activité Agent</span>
             </div>
-            {isAgentRunning && <span className="text-[10px] text-emerald-400 font-bold uppercase animate-pulse tracking-widest">Phase Autonome</span>}
+            {isAgentRunning && <span className="text-[10px] text-emerald-400 font-black uppercase animate-pulse tracking-widest">Processus Autonome Actif</span>}
           </div>
           
-          <div className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-dark">
+          <div className="flex-1 overflow-y-auto p-6 space-y-2 scrollbar-dark">
             {logs.length === 0 ? (
-              <div className="text-slate-600 italic">En attente d'initialisation...</div>
+              <div className="text-slate-600 italic opacity-50 select-none">Agent inactif. En attente de données CV...</div>
             ) : (
               logs.map(log => (
-                <div key={log.id} className="flex space-x-3">
-                  <span className="text-slate-500 shrink-0">[{log.timestamp}]</span>
+                <div key={log.id} className="flex space-x-4 animate-in">
+                  <span className="text-slate-600 shrink-0 font-medium select-none">{log.timestamp}</span>
                   <span className={`
                     ${log.type === 'success' ? 'text-emerald-400' : ''}
                     ${log.type === 'error' ? 'text-rose-400' : ''}
                     ${log.type === 'warning' ? 'text-amber-400' : ''}
                     ${log.type === 'agent' ? 'text-indigo-400 font-bold' : 'text-slate-300'}
                   `}>
-                    {log.type === 'agent' ? '🤖 ' : ''}{log.message}
+                    {log.type === 'agent' ? '● ' : ''}{log.message}
                   </span>
                 </div>
               ))
