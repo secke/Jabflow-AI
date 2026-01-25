@@ -4,12 +4,25 @@ import { UserProfile, JobOpportunity } from "./types";
 
 const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
-export const extractProfileFromCV = async (cvText: string): Promise<UserProfile> => {
+export const extractProfileFromCV = async (base64Data: string, mimeType: string): Promise<UserProfile> => {
   const ai = getAI();
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: `Extract key professional information from this CV text. Return as JSON. 
-    CV Text: ${cvText}`,
+    contents: [
+      {
+        parts: [
+          {
+            inlineData: {
+              data: base64Data,
+              mimeType: mimeType,
+            },
+          },
+          {
+            text: "Extract key professional information from this CV document. Return as JSON. If it's an image or PDF, perform OCR first. Focus on accuracy.",
+          },
+        ],
+      },
+    ],
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -27,12 +40,12 @@ export const extractProfileFromCV = async (cvText: string): Promise<UserProfile>
   });
 
   const data = JSON.parse(response.text || '{}');
-  return { ...data, cvText };
+  return { ...data, cvText: data.experience };
 };
 
-export const searchJobs = async (profile: UserProfile): Promise<JobOpportunity[]> => {
+export const searchJobs = async (profile: UserProfile, targetLocation: string): Promise<JobOpportunity[]> => {
   const ai = getAI();
-  const prompt = `Find 5 active job openings for a ${profile.title} with skills in ${profile.skills.join(", ")} in ${profile.location}. 
+  const prompt = `Find 5 active job openings for a ${profile.title} with skills in ${profile.skills.join(", ")} in ${targetLocation}. 
   Focus on high-match roles. Provide URLs and basic details.`;
 
   const response = await ai.models.generateContent({
@@ -43,13 +56,12 @@ export const searchJobs = async (profile: UserProfile): Promise<JobOpportunity[]
     },
   });
 
-  // Extract grounding metadata for URLs
   const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
   const searchResults = chunks.map((chunk: any, index: number) => ({
     id: `job-${index}-${Date.now()}`,
     title: chunk.web?.title || "Unknown Role",
     company: "Found via Search",
-    location: profile.location,
+    location: targetLocation,
     url: chunk.web?.uri || "#",
     descriptionSnippet: response.text || "No description available",
     fitScore: 0,
@@ -57,7 +69,6 @@ export const searchJobs = async (profile: UserProfile): Promise<JobOpportunity[]
     status: 'new' as const,
   }));
 
-  // Limit to unique-ish URLs and ensure we have some results
   return searchResults.filter((job: any) => job.url !== "#").slice(0, 5);
 };
 
@@ -66,7 +77,8 @@ export const analyzeJobFit = async (job: JobOpportunity, profile: UserProfile): 
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
     contents: `Analyze the fit between this candidate and this job.
-    Candidate CV: ${profile.cvText}
+    Candidate Background: ${profile.experience}
+    Top Skills: ${profile.skills.join(', ')}
     Job Title: ${job.title}
     Job Source/Text: ${job.descriptionSnippet}
     
